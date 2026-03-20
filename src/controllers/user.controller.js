@@ -406,5 +406,216 @@ const updateCoverImage = asyncHandler(async (req , res) => {
 
 })
 
+const getUserChannelProfile = asyncHandler(async (req , res) => {
 
-export { registerUser , loginUser , logoutUser , refreshAccessToken , getCurrentUser , changePassword , updateAccountDetails , updateAvatar , updateCoverImage};
+    /*
+================= AGGREGATION PIPELINE STEPS =================
+
+1. Extract username from request params.
+   → Used to identify which channel/profile to fetch.
+
+2. Validate username.
+   → If empty or missing, throw 400 error.
+
+3. Use $match stage.
+   → Find the user document whose username matches (case-normalized).
+
+4. Use $lookup (subscribers).
+   → Join with "subscriptions" collection.
+   → Match where: subscriptions.channel = user._id
+   → Result: array of all subscribers of this channel.
+
+5. Use $lookup (subscribedTo).
+   → Join with "subscriptions" collection.
+   → Match where: subscriptions.subscriber = user._id
+   → Result: array of channels this user has subscribed to.
+
+6. Use $addFields to compute extra fields:
+   a) subscribersCount
+   → Count total subscribers using $size.
+   b) channelsSubscribedToCount
+   → Count how many channels user follows using $size.
+   c) isSubscribed
+   → Check if current logged-in user exists in subscribers array.
+   → Uses $in + $cond to return true/false.
+
+7. Use $project stage.
+   → Select only required fields to send in response.
+   → Remove unnecessary data for cleaner output.
+
+8. Check if result exists.
+   → If no user found, throw 404 error.
+
+9. Send response.
+   → Return first element of aggregation result with success message.
+
+==============================================================
+*/
+
+    const{userName} = req.params
+    if(!userName.trim()){
+        throw new ApiError(400, "User name is missing")
+    }
+
+    const channel = User.aggregate([
+        {
+            $match : {
+                userName : userName?.tolowercase()
+            }
+        },
+        {
+            $lookup : {
+                from : "subscriptions",
+                localField : "_id", 
+                foreignField : "channel",
+                as : "subscribers"
+            }
+        },
+        {
+            $lookup : {
+                from : "subscriptions",
+                localField : "_id", 
+                foreignField : "subscriber",
+                as : "subsribedTo"
+            }
+        },
+        {
+            $addFields : {
+                subscribersCount : {
+                    $size : "$subscribers"
+                },
+                channelSubscribedToCount : {
+                    $size : "$subsribedTo"
+                },
+                isSubscribed : {
+                    $cond : {
+                        if : {$in : [new mongoose.Types.ObjectId(req.user?._id) , "$subscribers.subscriber"]},
+                        then : true,
+                        else : false
+                    }
+                }
+            }
+        },
+        {
+            $project : {
+                fullName: 1,
+                userName: 1,
+                subscribersCount: 1,
+                channelSubscribedToCount: 1,
+                isSubscribed: 1,
+                avatar: 1,
+                coverImage: 1,
+                email: 1
+            }
+        }
+
+    ])
+
+    if(!channel?.length){
+        throw new ApiError(400, "Channel does not exists")
+    }
+
+    return res.status(200)
+    .json(new ApiResponse(
+        200,
+        channel[0],
+        "User Channel fetched Successfully"
+    ))
+    
+
+})
+
+const getWatchHistory = asyncHandler(async (req, res) => {
+    /*
+================= WATCH HISTORY PIPELINE STEPS =================
+
+1. Use $match stage.
+   → Find the currently logged-in user using _id.
+   → Convert req.user._id into ObjectId for matching.
+
+2. Use $lookup to fetch watch history videos.
+   → Join "videos" collection.
+   → Match where: videos._id ∈ user.watchHistory array.
+   → Result: Replace watchHistory with full video documents.
+
+3. Inside $lookup → use pipeline for advanced population.
+
+   3.1 Use nested $lookup to fetch video owner details.
+   → Join "users" collection.
+   → Match where: users._id = videos.owner
+   → Result: Each video gets an "owner" array.
+
+   3.2 Use $project inside nested lookup.
+   → Return only required owner fields:
+   fullName, username, avatar.
+   → Avoid unnecessary data (optimization).
+
+   3.3 Use $addFields.
+   → Convert owner array → single object using $first.
+   → Makes response cleaner:
+   owner: {} instead of owner: [{}]
+
+4. Final result:
+   → User document now contains:
+   watchHistory = array of videos
+   Each video contains embedded owner details.
+
+5. Send response.
+   → Return user[0].watchHistory (only videos, not full user object).
+
+===============================================================
+*/
+    const user = await User.aggregate([
+            {
+                $match: {
+                    _id: new mongoose.Types.ObjectId(req.user._id)
+                }
+            },
+            {
+                $lookup: {
+                    from: "videos",
+                    localField: "watchHistory",
+                    foreignField: "_id",
+                    as: "watchHistory",
+                    pipeline: [
+                        {
+                            $lookup: {
+                                from: "users",
+                                localField: "owner",
+                                foreignField: "_id",
+                                as: "owner",
+                                pipeline: [
+                                    {
+                                        $project: {
+                                            fullName: 1,
+                                            username: 1,
+                                            avatar: 1
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            $addFields:{
+                                owner:{
+                                    $first: "$owner"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ])
+
+        return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                user[0].watchHistory,
+                "Watch history fetched successfully"
+            )
+        )
+})
+
+export { registerUser , loginUser , logoutUser , refreshAccessToken , getCurrentUser , changePassword , updateAccountDetails , updateAvatar , updateCoverImage , getUserChannelProfile , getWatchHistory};
