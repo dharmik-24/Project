@@ -2,8 +2,9 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import {ApiError} from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import {User} from "../models/user.model.js";
-import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { deleteFromCloudinary, uploadOnCloudinary } from "../utils/cloudinary.js";
 import jwt from "jsonwebtoken"
+import mongoose from "mongoose"
 
 const generateAccessAndRefreshToken = async (userId) => {
     //Generalized method for generating access and refresh tokens...
@@ -91,8 +92,14 @@ const registerUser = asyncHandler(async (req , res) => {
         email,
         password,
         userName : userName.toLowerCase(),
-        avatar : avatar.url,
-        coverImage : coverImage.url || ""
+        avatar : {
+            url : avatar.url,
+            publicId : avatar.public_id
+        },
+        coverImage : {
+            url : coverImage.url || "" ,
+            publicId : coverImage.public_id || ""
+        }
     })
 
     //check for user creation
@@ -142,7 +149,7 @@ const loginUser = asyncHandler(async (req , res) => {
     //Check Password 
     const checkPassword = await user.isPasswordCorrect(password)
     if(!checkPassword){
-        throw new error(401, "Wrong User Credentials")
+        throw new ApiError(401, "Wrong User Credentials")
     }
 
     //generate access and refresh tokens 
@@ -322,7 +329,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
         //return response 
 
         const {fullName , email} = req.body
-        if(!fullName || !email){
+        if(!fullName && !email){
             throw new ApiError(400, "All fields are required")
         }
 
@@ -344,26 +351,35 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
 
 const updateAvatar = asyncHandler(async (req , res) => {
     //steps ::
-        //take file using multer
-        //upload it on cloudinary
-        //store the url of cloudinary into database
-        //return response
+    // 1. Get the avatar file path from the request
+    // 2. Validate if the file exists
+    // 3. Fetch the current user's avatar details (to get the old publicId)
+    // 4. Delete the old avatar from Cloudinary if it exists
+    // 5. Upload the new avatar to Cloudinary
+    // 6. Update the user's avatar in the database with new url and publicId
+    // 7. Return the response
 
     const avatarLocalPath = req.file?.path
     if(!avatarLocalPath){
         throw new ApiError(400, "Avatar file is missing")
     }
 
-    const avatar = await uploadOnCloudinary(avatarLocalPath)
-    if(!avatar.url){
-        throw new ApiError(400, "Error while uploading avatar")
+    const currentUser = await User.findById(req.user._id).select("avatar")
+    if(currentUser.avatar && currentUser.avatar.publicId){
+        await deleteFromCloudinary(currentUser.avatar.publicId)
     }
+
+
+    const avatar = await uploadOnCloudinary(avatarLocalPath)
 
     const user = await User.findByIdAndUpdate(
         req.user?._id,
         {
             $set : {
-                avatar : avatar.url
+                avatar : {
+                    url : avatar.url,
+                    publicId : avatar.public_id
+                }
             }
         },
         {new:true}
@@ -375,27 +391,29 @@ const updateAvatar = asyncHandler(async (req , res) => {
 })
 
 const updateCoverImage = asyncHandler(async (req , res) => {
-    //steps ::
-        //take file using multer
-        //upload it on cloudinary
-        //store the url of cloudinary into database
-        //return response
+
 
     const coverImageLocalPath = req.file?.path
     if(!coverImageLocalPath){
-        throw new ApiError(400, "Avatar file is missing")
+        throw new ApiError(400, "Cover Image file is missing")
+    }
+
+    const currentUser = await User.findById(req.user._id).select("coverImage")
+    if(currentUser.coverImage && currentUser.coverImage.publicId){
+        await deleteFromCloudinary(currentUser.coverImage.publicId)
     }
 
     const coverImage = await uploadOnCloudinary(coverImageLocalPath)
-    if(!avatar.url){
-        throw new ApiError(400, "Error while uploading Cover Image")
-    }
+    
 
     const user = await User.findByIdAndUpdate(
         req.user?._id,
         {
             $set : {
-                coverImage : coverImage.url
+                coverImage : {
+                    url : coverImage.url,
+                    publicId : coverImage.public_id
+                }
             }
         },
         {new:true}
@@ -453,14 +471,14 @@ const getUserChannelProfile = asyncHandler(async (req , res) => {
 */
 
     const{userName} = req.params
-    if(!userName.trim()){
+    if(!userName){
         throw new ApiError(400, "User name is missing")
     }
 
-    const channel = User.aggregate([
+    const channel = await User.aggregate([
         {
             $match : {
-                userName : userName?.tolowercase()
+                userName : userName?.toLowerCase()
             }
         },
         {
@@ -512,7 +530,7 @@ const getUserChannelProfile = asyncHandler(async (req , res) => {
     ])
 
     if(!channel?.length){
-        throw new ApiError(400, "Channel does not exists")
+        throw new ApiError(404, "Channel not found")
     }
 
     return res.status(200)

@@ -27,11 +27,22 @@ const userSchema = new mongoose.Schema({
         index: true
     },
     avatar: {
-        type: String,       //From Cloudonary
-        required: true
+        url : {
+            type: String,
+            required: [true, "Avatar URL is must"]  
+        },
+        publicId : {
+            type: String,
+            required: [true, "Avatar Public ID is must"]
+        }
     },
     coverImage: {
-        type: String
+        url : {
+            type: String,
+        },
+        publicId : {
+            type: String,
+        }
     },
     watchHistory: [
         {
