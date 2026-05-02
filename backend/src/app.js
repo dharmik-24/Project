@@ -8,10 +8,10 @@ const app = express();
 //Now we have to do some configuaration settings ::
 
 //Configuration setting for CORS
-// app.use(cors({
-//     origin: process.env.CORS_ORIGIN,
-//     credentials: true
-// }))
+app.use(cors({
+    origin: process.env.CORS_ORIGIN,
+    credentials: true
+}))
 
 //Allow express to use json
 app.use(express.json({limit: "16kb"}));
